@@ -1,7 +1,7 @@
 package Janney
 
 import (
-	"Janney/consistent_hash"
+	"Janney/consistenthash"
 	"fmt"
 	"io/ioutil"
 	"log"
@@ -20,7 +20,7 @@ type HttpPool struct {
 	self       string // 自身服务端的地址和端口
 	basePath   string // url增加一个字段标注该服务，比如127.0.0.1:8888/janney/xxx/xxx
 	mu         sync.Mutex
-	peers      *consistent_hash.Map  // 存储其他节点
+	peers      *consistenthash.Map   // 存储其他节点
 	httpGetter map[string]PeerGetter // 记录节点地址和该节点getter映射
 }
 
@@ -28,14 +28,12 @@ func NewHttpPool(self string) *HttpPool {
 	return &HttpPool{
 		self:       self,
 		basePath:   DefaultBasePath,
-		peers:      consistent_hash.NewMap(replicas, nil),
-		httpGetter: make(map[string]PeerGetter),
 	}
 }
 
 // 提供本地节点的http服务，只接受/janney/group/key的请求
 func (hp *HttpPool) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	log.Println("[Jenney receive:]", r.URL.Path)
+	log.Println("[Janney receive:]", r.URL.Path)
 
 	// 判断请求的base地址
 	if !strings.HasPrefix(r.URL.Path, hp.basePath) {
@@ -81,10 +79,18 @@ func (hp *HttpPool) Set(peers ...string) {
 	hp.mu.Lock()
 	defer hp.mu.Unlock()
 
+	if hp.peers == nil {
+		hp.peers = consistenthash.NewMap(replicas, nil)
+	}
+
+	if hp.httpGetter == nil {
+		hp.httpGetter = make(map[string]PeerGetter)
+	}
+
 	// 将每个节点地址存入哈希环，并记录每个节点的getter
 	for _, p := range peers {
 		hp.peers.Add(p)
-		hp.httpGetter[p] = &HttpGetter{baseURL: p + hp.basePath}
+		hp.httpGetter[p] = &HttpGetter{baseURL: p + hp.basePath} // 127.0.0.1:8888 + /janney/
 	}
 }
 

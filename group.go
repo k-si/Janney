@@ -1,6 +1,7 @@
 package Janney
 
 import (
+	"Janney/singleflight"
 	"errors"
 	"log"
 	"sync"
@@ -24,9 +25,10 @@ var (
 
 type Group struct {
 	name      string
-	getter    Getter     // 用户自定义方法，用于获取不在内存中的数据
-	mainCache *Cache     // 带有并发控制的cache，LRU淘汰策略
-	peers     PeerPicker // 可以获取其他节点
+	getter    Getter              // 用户自定义方法，用于获取不在内存中的数据
+	mainCache *Cache              // 带有并发控制的cache，LRU淘汰策略
+	peers     PeerPicker          // 可以获取其他节点
+	reqGroup  *singleflight.Group // 防止缓存击穿机制
 }
 
 func NewGroup(name string, cacheBytes int64, getter Getter) *Group {
@@ -41,6 +43,7 @@ func NewGroup(name string, cacheBytes int64, getter Getter) *Group {
 		name:      name,
 		getter:    getter,
 		mainCache: &Cache{cacheBytes: cacheBytes},
+		reqGroup:  &singleflight.Group{},
 	}
 	groups[name] = g
 	return g
@@ -74,19 +77,29 @@ func (g *Group) Get(key string) (ByteView, error) {
 
 func (g *Group) load(key string) (ByteView, error) {
 
-	// 尝试从别的节点获取
-	if g.peers != nil {
-		if peer, ok := g.peers.PickPeer(key); ok {
-			if bv, err := g.getFromPeer(key, peer); err == nil {
-				return bv, nil
+	// 防止缓存击穿
+	view, err := g.reqGroup.Do(key, func() (interface{}, error) {
+
+		// 尝试从别的节点获取
+		if g.peers != nil {
+			if peer, ok := g.peers.PickPeer(key); ok {
+				if bv, err := g.getFromPeer(key, peer); err == nil {
+					return bv, nil
+				}
 			}
 		}
+
+		log.Println("[Janney] get from local")
+
+		// 别的节点没有数据，从本地获取
+		return g.getLocally(key)
+	})
+
+	if err != nil {
+		return ByteView{}, err
 	}
 
-	log.Println("[Janney] get from local")
-
-	// 别的节点没有数据，从本地获取
-	return g.getLocally(key)
+	return view.(ByteView), nil
 }
 
 func (g *Group) getFromPeer(key string, peer PeerGetter) (ByteView, error) {

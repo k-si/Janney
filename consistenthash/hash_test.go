@@ -1,4 +1,4 @@
-package consistent_hash
+package consistenthash
 
 import (
 	"github.com/stretchr/testify/assert"
